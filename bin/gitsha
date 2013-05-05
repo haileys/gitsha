@@ -1,0 +1,59 @@
+#!/usr/bin/env ruby
+require "digest/sha1"
+require "zlib"
+require "gitsha"
+require "fileutils"
+
+if ARGV.size != 2
+  $stderr.puts "Usage: #$0 <ref> <new sha prefix>"
+  exit! false
+end
+
+ref, sha_prefix = ARGV
+
+unless sha_prefix =~ /\A[a-f0-9]{,40}\z/
+  $stderr.puts "fatal: sha prefix in invalid format"
+  exit! false
+end
+
+git_repo = `git rev-parse --show-toplevel`.chomp
+exit! false unless $?.success?
+Dir.chdir git_repo
+
+old_sha = IO.popen(["git", "rev-parse", ref], err: [:child, :out]).gets.chomp
+unless old_sha =~ /\A[a-f0-9]{40}\z/
+  $stderr.puts old_sha
+  exit! false
+end
+
+commit_header, commit_data = Zlib::Inflate.inflate(File.read(".git/objects/#{old_sha[0...2]}/#{old_sha[2..-1]}")).split("\0", 2)
+unless commit_header =~ /\Acommit /
+  $stderr.puts "fatal: #{old_sha} is not a commit"
+  exit! false
+end
+
+sha_prefix_half_hex_dig = sha_prefix.length.odd?
+
+sha_prefix = sha_prefix.chars.each_slice(2).map { |a,b|
+  "#{a}#{b || 0}".to_i(16).chr
+}.join.force_encoding("ASCII-8BIT")
+
+cpus =  case `uname`.chomp
+        when "Darwin"
+          `sysctl -n hw.ncpu`.to_i
+        when "Linux"
+          `nproc`.to_i
+        else
+          1
+        end
+
+new_commit_data, new_sha = GitSha.bruteforce!(commit_data, sha_prefix, sha_prefix_half_hex_dig, cpus)
+
+new_sha_hex = new_sha.bytes.map { |b| "%02x" % b.ord }.join
+
+FileUtils.mkdir_p(".git/objects/#{new_sha_hex[0...2]}")
+File.open(".git/objects/#{new_sha_hex[0...2]}/#{new_sha_hex[2..-1]}", "wb") do |f|
+  f.write Zlib::Deflate.deflate(new_commit_data)
+end
+
+puts "wrote commit: #{new_sha_hex}"

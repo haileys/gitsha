@@ -1,0 +1,8 @@
+*.swp
+*.bundle
+*.so
+*.o
+*.gem
+*.log
+*.dSYM
+/ext/Makefile
