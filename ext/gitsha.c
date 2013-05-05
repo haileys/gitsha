@@ -1,4 +1,5 @@
 #include <ruby.h>
+#include <signal.h>
 #include <pthread.h>
 #include <openssl/sha.h>
 
@@ -32,7 +33,7 @@ typedef struct {
     size_t counter_offset;
     char* prefix;
     size_t prefix_len;
-    char prefix_half_dig;
+    unsigned char prefix_half_dig;
     char prefix_has_half_dig;
     size_t counter;
     int stride;
@@ -59,19 +60,25 @@ bruteforce_loop(char* output_sha, char* scratch_buff, size_t scratch_len, size_t
 }
 
 static void
-bruteforce_loop_with_half_dig(char* output_sha, char* scratch_buff, size_t scratch_len, size_t counter_offset, char* prefix, size_t prefix_len, size_t counter, int stride, char half_dig)
+bruteforce_loop_with_half_dig(char* output_sha, char* scratch_buff, size_t scratch_len, size_t counter_offset, char* prefix, size_t prefix_len, size_t counter, int stride, unsigned char half_dig)
 {
     unsigned char sha[20];
 
     while(1) {
         write_counter_hex(scratch_buff + counter_offset, counter);
         SHA1((unsigned char*)scratch_buff, scratch_len, sha);
-        if(memcmp(sha, prefix, prefix_len) == 0 && (sha[prefix_len] >> 4) == half_dig) {
+        if((prefix_len == 0 || memcmp(sha, prefix, prefix_len) == 0) && (sha[prefix_len] >> 4) == half_dig) {
             memcpy(output_sha, sha, 20);
             return;
         }
         counter += stride;
     }
+}
+
+static void
+thread_term()
+{
+    pthread_exit(NULL);
 }
 
 static void*
@@ -80,6 +87,7 @@ worker_thread_main(void* arg)
     worker_t* w = arg;
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+    signal(SIGTERM, thread_term);
     if(w->prefix_has_half_dig) {
         bruteforce_loop_with_half_dig(
             (char*)w->sha,
@@ -132,7 +140,7 @@ setup_worker(worker_t* w, char* commit_data, size_t commit_data_len, char* prefi
     w->prefix = prefix_copy;
     if(prefix_has_half_dig) {
         w->prefix_len = prefix_len - 1;
-        w->prefix_half_dig = prefix[prefix_len - 1] >> 4;
+        w->prefix_half_dig = (unsigned char)prefix[prefix_len - 1] >> 4;
         w->prefix_has_half_dig = 1;
     } else {
         w->prefix_len = prefix_len;
@@ -145,7 +153,8 @@ setup_worker(worker_t* w, char* commit_data, size_t commit_data_len, char* prefi
 static void
 destroy_worker(worker_t* w)
 {
-    pthread_cancel(w->thread);
+    pthread_kill(w->thread, SIGTERM);
+    pthread_join(w->thread, NULL);
     free(w->scratch_buff);
     free(w->prefix);
 }
