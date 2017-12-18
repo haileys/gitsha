@@ -1,5 +1,7 @@
 require "mkmf"
 
+dir_config "openssl"
+
 have_header "pthread.h"
 
 pkg_config "openssl"
